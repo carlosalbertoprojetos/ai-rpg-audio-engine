@@ -1,0 +1,49 @@
+.player-led {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  border: 1px solid #3a4f61;
+  background: linear-gradient(180deg, #1f2d3a, #16212b);
+  color: #eaf3fc;
+  border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.player-led:hover {
+  transform: translateY(-1px);
+  border-color: #87a4bc;
+}
+
+.led {
+  width: 14px;
+  height: 14px;
+  border-radius: 100%;
+  box-shadow: 0 0 0 2px #0f171e;
+}
+
+.led.ok {
+  background: #2dc653;
+  box-shadow: 0 0 14px #2dc653aa;
+}
+
+.led.danger {
+  background: #f94144;
+  box-shadow: 0 0 14px #f94144aa;
+}
+
+.player-name {
+  font-weight: 700;
+}
+
+.player-state {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  color: #9fb4c7;
+}
+

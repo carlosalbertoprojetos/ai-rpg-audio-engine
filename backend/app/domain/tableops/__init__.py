@@ -1,0 +1,2 @@
+"""Table operations domain."""
+
