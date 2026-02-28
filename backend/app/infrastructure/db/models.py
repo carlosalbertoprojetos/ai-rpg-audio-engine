@@ -76,3 +76,53 @@ class MembershipRecord(Base):
     user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), index=True)
     organization_id: Mapped[str] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(32), index=True)
+
+
+class OrganizationRecord(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    owner_user_id: Mapped[str] = mapped_column(String(64))
+    subscription_plan: Mapped[str] = mapped_column(String(32), default="starter")
+    subscription_status: Mapped[str] = mapped_column(String(32), default="active")
+    billing_cycle: Mapped[str] = mapped_column(String(32), default="monthly")
+
+
+class SessionRecord(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    table_id: Mapped[str] = mapped_column(String(64), index=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AudioTrackRecord(Base):
+    __tablename__ = "audio_tracks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    s3_key: Mapped[str] = mapped_column(String(255), index=True)
+    duration_seconds: Mapped[int]
+
+
+class TriggerRecord(Base):
+    __tablename__ = "triggers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    table_id: Mapped[str] = mapped_column(String(64), index=True)
+    condition_type: Mapped[str] = mapped_column(String(80))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class AIContextRecord(Base):
+    __tablename__ = "ai_contexts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    mood: Mapped[str] = mapped_column(String(64))
+    recommended_track_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

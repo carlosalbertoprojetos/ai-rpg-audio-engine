@@ -2,9 +2,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.application.governance.use_cases import RecordAuditEventCommand, RecordAuditEventUseCase
+from app.application.ports.enterprise import (
+    AIContextRepository,
+    AudioTrackRepository,
+    TriggerRepository,
+)
 from app.application.ports.event_bus import EventBus
 from app.application.ports.repositories import SoundEventRepository
-from app.domain.audio.entities import SoundEvent
+from app.domain.audio.entities import AIContext, AudioTrack, SoundEvent, Trigger
 from app.domain.shared.events import DomainEvent
 
 
@@ -99,3 +104,138 @@ class ExecuteDueSoundEventsUseCase:
             )
         return due_events
 
+
+@dataclass(slots=True, frozen=True)
+class CreateAudioTrackCommand:
+    organization_id: str
+    title: str
+    s3_key: str
+    duration_seconds: int
+    actor_id: str
+
+
+class CreateAudioTrackUseCase:
+    def __init__(
+        self,
+        repository: AudioTrackRepository,
+        record_audit: RecordAuditEventUseCase,
+    ) -> None:
+        self._repository = repository
+        self._record_audit = record_audit
+
+    async def __call__(self, command: CreateAudioTrackCommand) -> AudioTrack:
+        track = AudioTrack.create(
+            organization_id=command.organization_id,
+            title=command.title,
+            s3_key=command.s3_key,
+            duration_seconds=command.duration_seconds,
+        )
+        await self._repository.save(track)
+        await self._record_audit(
+            RecordAuditEventCommand(
+                organization_id=command.organization_id,
+                actor_id=command.actor_id,
+                action="audio.track.created",
+                target=track.id,
+                data={"title": track.title, "s3_key": track.s3_key},
+            )
+        )
+        return track
+
+
+@dataclass(slots=True, frozen=True)
+class CreateTriggerCommand:
+    organization_id: str
+    table_id: str
+    condition_type: str
+    payload: dict[str, str]
+    actor_id: str
+
+
+class CreateTriggerUseCase:
+    def __init__(
+        self,
+        repository: TriggerRepository,
+        event_bus: EventBus,
+        record_audit: RecordAuditEventUseCase,
+    ) -> None:
+        self._repository = repository
+        self._event_bus = event_bus
+        self._record_audit = record_audit
+
+    async def __call__(self, command: CreateTriggerCommand) -> Trigger:
+        trigger = Trigger.create(
+            table_id=command.table_id,
+            condition_type=command.condition_type,
+            payload=command.payload,
+        )
+        await self._repository.save(trigger)
+        await self._record_audit(
+            RecordAuditEventCommand(
+                organization_id=command.organization_id,
+                actor_id=command.actor_id,
+                action="trigger.created",
+                target=trigger.id,
+                data={"table_id": trigger.table_id, "condition_type": trigger.condition_type},
+            )
+        )
+        await self._event_bus.publish(
+            DomainEvent(
+                event_type="trigger.created",
+                payload={"table_id": trigger.table_id, "trigger_id": trigger.id},
+            )
+        )
+        return trigger
+
+
+@dataclass(slots=True, frozen=True)
+class GenerateAdaptiveAmbienceCommand:
+    organization_id: str
+    session_id: str
+    mood: str
+    actor_id: str
+
+
+class GenerateAdaptiveAmbienceUseCase:
+    def __init__(
+        self,
+        repository: AIContextRepository,
+        event_bus: EventBus,
+        record_audit: RecordAuditEventUseCase,
+    ) -> None:
+        self._repository = repository
+        self._event_bus = event_bus
+        self._record_audit = record_audit
+
+    async def __call__(self, command: GenerateAdaptiveAmbienceCommand) -> AIContext:
+        tags = {
+            "battle": ["combat", "drums", "tension"],
+            "mystery": ["ambient", "dark", "echo"],
+            "calm": ["nature", "wind", "soft"],
+        }.get(command.mood, ["ambient"])
+        context = AIContext.create(
+            session_id=command.session_id,
+            mood=command.mood,
+            recommended_track_tags=tags,
+        )
+        await self._repository.save(context)
+        await self._record_audit(
+            RecordAuditEventCommand(
+                organization_id=command.organization_id,
+                actor_id=command.actor_id,
+                action="ai.ambience.generated",
+                target=context.id,
+                data={"session_id": context.session_id, "mood": context.mood},
+            )
+        )
+        await self._event_bus.publish(
+            DomainEvent(
+                event_type="ai.ambience.generated",
+                payload={
+                    "session_id": context.session_id,
+                    "mood": context.mood,
+                    "tags": ",".join(context.recommended_track_tags),
+                },
+            )
+        )
+        return context

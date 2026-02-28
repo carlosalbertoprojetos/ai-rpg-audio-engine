@@ -3,8 +3,24 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 
-from app.application.audio.use_cases import ExecuteDueSoundEventsCommand, ScheduleSoundEventCommand
-from app.application.identity.use_cases import IssueTokenCommand, RegisterUserCommand
+from app.application.audio.use_cases import (
+    CreateAudioTrackCommand,
+    CreateTriggerCommand,
+    ExecuteDueSoundEventsCommand,
+    GenerateAdaptiveAmbienceCommand,
+    ScheduleSoundEventCommand,
+)
+from app.application.identity.use_cases import (
+    IssueTokenCommand,
+    ListUsersCommand,
+    RegisterUserCommand,
+    UpdateUserCommand,
+)
+from app.application.organization.use_cases import (
+    EnsureOrganizationCommand,
+    UpdateSubscriptionPlanCommand,
+)
+from app.application.session.use_cases import EndSessionCommand, StartSessionCommand
 from app.application.tableops.use_cases import (
     AddPlayerCommand,
     CreateTableCommand,
@@ -19,6 +35,16 @@ from app.interfaces.api.auth import (
 )
 from app.interfaces.schemas.audio import ScheduleSoundEventRequest, SoundEventResponse
 from app.interfaces.schemas.auth import IssueTokenRequest, RegisterRequest, TokenResponse
+from app.interfaces.schemas.enterprise_audio import (
+    AIContextResponse,
+    AudioTrackResponse,
+    CreateAudioTrackRequest,
+    CreateTriggerRequest,
+    GenerateAIContextRequest,
+    TriggerResponse,
+)
+from app.interfaces.schemas.organization import OrganizationResponse, UpdatePlanRequest
+from app.interfaces.schemas.session import SessionResponse, StartSessionRequest
 from app.interfaces.schemas.tableops import (
     AddPlayerRequest,
     CreateTableRequest,
@@ -26,10 +52,12 @@ from app.interfaces.schemas.tableops import (
     PlayerResponse,
     UpdateAvailabilityRequest,
 )
+from app.interfaces.schemas.users import UpdateUserRequest, UserSummaryResponse
 
 ADMIN_OR_NARRATOR = {"admin", "narrator"}
 READ_AUDIT_ROLES = {"admin", "narrator", "observer"}
 VALID_ROLES = {"admin", "narrator", "observer"}
+ADMIN_ONLY = {"admin"}
 
 
 def get_router(get_container: Callable[[], Container]) -> APIRouter:
@@ -56,7 +84,62 @@ def get_router(get_container: Callable[[], Container]) -> APIRouter:
                 role=request.role,
             )
         )
+        await container.use_cases.ensure_organization(
+            EnsureOrganizationCommand(
+                organization_id=request.organization_id,
+                owner_user_id=profile.user_id,
+                name=f"Organization {request.organization_id}",
+            )
+        )
         return {"user_id": profile.user_id, "organization_id": profile.organization_id}
+
+    @router.get("/organizations/{organization_id}", response_model=OrganizationResponse)
+    async def get_organization(
+        organization_id: str,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> OrganizationResponse:
+        require_roles(auth, READ_AUDIT_ROLES, "get_organization")
+        ensure_same_organization(auth, organization_id)
+        organization = await container.organization_repository.get_by_id(organization_id)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="organization not found")
+        return OrganizationResponse(
+            id=organization.id,
+            name=organization.name,
+            owner_user_id=organization.owner_user_id,
+            subscription_plan=organization.subscription.plan,
+            subscription_status=organization.subscription.status.value,
+            billing_cycle=organization.subscription.billing_cycle,
+        )
+
+    @router.patch(
+        "/organizations/{organization_id}/subscription",
+        response_model=OrganizationResponse,
+    )
+    async def update_subscription(
+        organization_id: str,
+        request: UpdatePlanRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> OrganizationResponse:
+        require_roles(auth, ADMIN_ONLY, "update_subscription")
+        ensure_same_organization(auth, organization_id)
+        organization = await container.use_cases.update_subscription_plan(
+            UpdateSubscriptionPlanCommand(
+                organization_id=organization_id,
+                actor_id=auth.user_id,
+                plan=request.plan,
+            )
+        )
+        return OrganizationResponse(
+            id=organization.id,
+            name=organization.name,
+            owner_user_id=organization.owner_user_id,
+            subscription_plan=organization.subscription.plan,
+            subscription_status=organization.subscription.status.value,
+            billing_cycle=organization.subscription.billing_cycle,
+        )
 
     @router.post("/auth/token", response_model=TokenResponse)
     async def issue_token(
@@ -81,6 +164,60 @@ def get_router(get_container: Callable[[], Container]) -> APIRouter:
             token_type=token_result.token_type,
         )
 
+    @router.get("/users", response_model=list[UserSummaryResponse])
+    async def list_users(
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> list[UserSummaryResponse]:
+        require_roles(auth, ADMIN_ONLY, "list_users")
+        users = await container.use_cases.list_users(
+            ListUsersCommand(organization_id=auth.organization_id)
+        )
+        return [
+            UserSummaryResponse(
+                user_id=user.user_id,
+                email=user.email,
+                display_name=user.display_name,
+                organization_id=user.organization_id,
+                role=user.role,
+            )
+            for user in users
+        ]
+
+    @router.patch("/users/{user_id}", response_model=UserSummaryResponse)
+    async def update_user(
+        user_id: str,
+        request: UpdateUserRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> UserSummaryResponse:
+        require_roles(auth, ADMIN_ONLY, "update_user")
+        try:
+            updated = await container.use_cases.update_user(
+                UpdateUserCommand(
+                    organization_id=auth.organization_id,
+                    user_id=user_id,
+                    display_name=request.display_name,
+                    role=request.role,
+                )
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if "scope mismatch" in message:
+                raise HTTPException(status_code=403, detail=message) from exc
+            raise HTTPException(status_code=404, detail=message) from exc
+
+        if updated.organization_id != auth.organization_id:
+            raise HTTPException(status_code=403, detail="organization scope mismatch")
+
+        return UserSummaryResponse(
+            user_id=updated.user_id,
+            email=updated.email,
+            display_name=updated.display_name,
+            organization_id=updated.organization_id,
+            role=updated.role,
+        )
+
     @router.post("/tables", response_model=CreateTableResponse)
     async def create_table(
         request: CreateTableRequest,
@@ -99,6 +236,62 @@ def get_router(get_container: Callable[[], Container]) -> APIRouter:
             id=table.id,
             organization_id=table.organization_id,
             name=table.name,
+        )
+
+    @router.post("/sessions", response_model=SessionResponse)
+    async def start_session(
+        request: StartSessionRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> SessionResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "start_session")
+        try:
+            session_entity = await container.use_cases.start_session(
+                StartSessionCommand(
+                    organization_id=auth.organization_id,
+                    table_id=request.table_id,
+                    actor_id=auth.user_id,
+                )
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if "scope mismatch" in detail:
+                raise HTTPException(status_code=403, detail=detail) from exc
+            raise HTTPException(status_code=404, detail=detail) from exc
+        return SessionResponse(
+            id=session_entity.id,
+            table_id=session_entity.table_id,
+            state=session_entity.state.value,
+            started_at=session_entity.started_at,
+            ended_at=session_entity.ended_at,
+        )
+
+    @router.post("/sessions/{session_id}/end", response_model=SessionResponse)
+    async def end_session(
+        session_id: str,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> SessionResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "end_session")
+        try:
+            session_entity = await container.use_cases.end_session(
+                EndSessionCommand(
+                    organization_id=auth.organization_id,
+                    session_id=session_id,
+                    actor_id=auth.user_id,
+                )
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if "scope mismatch" in detail:
+                raise HTTPException(status_code=403, detail=detail) from exc
+            raise HTTPException(status_code=404, detail=detail) from exc
+        return SessionResponse(
+            id=session_entity.id,
+            table_id=session_entity.table_id,
+            state=session_entity.state.value,
+            started_at=session_entity.started_at,
+            ended_at=session_entity.ended_at,
         )
 
     @router.post("/tables/{table_id}/players", response_model=PlayerResponse)
@@ -199,6 +392,97 @@ def get_router(get_container: Callable[[], Container]) -> APIRouter:
             command=ExecuteDueSoundEventsCommand(up_to=datetime.now(UTC))
         )
         return {"processed": len(events)}
+
+    @router.post("/audio-tracks", response_model=AudioTrackResponse)
+    async def create_audio_track(
+        request: CreateAudioTrackRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> AudioTrackResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "create_audio_track")
+        track = await container.use_cases.create_audio_track(
+            CreateAudioTrackCommand(
+                organization_id=auth.organization_id,
+                title=request.title,
+                s3_key=request.s3_key,
+                duration_seconds=request.duration_seconds,
+                actor_id=auth.user_id,
+            )
+        )
+        return AudioTrackResponse(
+            id=track.id,
+            organization_id=track.organization_id,
+            title=track.title,
+            s3_key=track.s3_key,
+            duration_seconds=track.duration_seconds,
+        )
+
+    @router.get("/audio-tracks", response_model=list[AudioTrackResponse])
+    async def list_audio_tracks(
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> list[AudioTrackResponse]:
+        require_roles(auth, READ_AUDIT_ROLES, "list_audio_tracks")
+        tracks = await container.audio_track_repository.list_by_organization(auth.organization_id)
+        return [
+            AudioTrackResponse(
+                id=track.id,
+                organization_id=track.organization_id,
+                title=track.title,
+                s3_key=track.s3_key,
+                duration_seconds=track.duration_seconds,
+            )
+            for track in tracks
+        ]
+
+    @router.post("/triggers", response_model=TriggerResponse)
+    async def create_trigger(
+        request: CreateTriggerRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> TriggerResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "create_trigger")
+        table = await container.table_repository.get_by_id(request.table_id)
+        if table is None:
+            raise HTTPException(status_code=404, detail="table not found")
+        ensure_same_organization(auth, table.organization_id)
+        trigger = await container.use_cases.create_trigger(
+            CreateTriggerCommand(
+                organization_id=auth.organization_id,
+                table_id=request.table_id,
+                condition_type=request.condition_type,
+                payload=request.payload,
+                actor_id=auth.user_id,
+            )
+        )
+        return TriggerResponse(
+            id=trigger.id,
+            table_id=trigger.table_id,
+            condition_type=trigger.condition_type,
+            payload=trigger.payload,
+        )
+
+    @router.post("/ai-contexts", response_model=AIContextResponse)
+    async def generate_ai_context(
+        request: GenerateAIContextRequest,
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> AIContextResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "generate_ai_context")
+        context = await container.use_cases.generate_adaptive_ambience(
+            GenerateAdaptiveAmbienceCommand(
+                organization_id=auth.organization_id,
+                session_id=request.session_id,
+                mood=request.mood,
+                actor_id=auth.user_id,
+            )
+        )
+        return AIContextResponse(
+            id=context.id,
+            session_id=context.session_id,
+            mood=context.mood,
+            recommended_track_tags=context.recommended_track_tags,
+        )
 
     @router.get("/audit/{organization_id}")
     async def list_audit_logs(

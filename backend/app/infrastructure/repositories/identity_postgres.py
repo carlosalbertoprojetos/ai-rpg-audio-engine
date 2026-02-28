@@ -4,7 +4,7 @@ from uuid import uuid4
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.application.ports.identity import AuthProfile, IdentityRepository
+from app.application.ports.identity import AuthProfile, IdentityRepository, UserSummary
 from app.infrastructure.db.models import MembershipRecord, UserRecord
 
 
@@ -106,6 +106,82 @@ class PostgresIdentityRepository(IdentityRepository):
                 email=user.email,
                 display_name=user.display_name,
                 password_hash=user.password_hash,
+                organization_id=membership.organization_id,
+                role=membership.role,
+            )
+
+    async def list_users(self, organization_id: str) -> list[UserSummary]:
+        return await asyncio.to_thread(self._list_users_sync, organization_id)
+
+    def _list_users_sync(self, organization_id: str) -> list[UserSummary]:
+        with self._session_factory() as session:
+            session: Session
+            stmt: Select[tuple[UserRecord, MembershipRecord]] = (
+                select(UserRecord, MembershipRecord)
+                .join(MembershipRecord, MembershipRecord.user_id == UserRecord.id)
+                .where(MembershipRecord.organization_id == organization_id)
+                .order_by(UserRecord.email.asc())
+            )
+            rows = session.execute(stmt).all()
+            return [
+                UserSummary(
+                    user_id=user.id,
+                    email=user.email,
+                    display_name=user.display_name,
+                    organization_id=membership.organization_id,
+                    role=membership.role,
+                )
+                for user, membership in rows
+            ]
+
+    async def update_user(
+        self,
+        organization_id: str,
+        user_id: str,
+        display_name: str | None,
+        role: str | None,
+    ) -> UserSummary:
+        return await asyncio.to_thread(
+            self._update_user_sync,
+            organization_id,
+            user_id,
+            display_name,
+            role,
+        )
+
+    def _update_user_sync(
+        self,
+        organization_id: str,
+        user_id: str,
+        display_name: str | None,
+        role: str | None,
+    ) -> UserSummary:
+        with self._session_factory() as session:
+            session: Session
+            membership_stmt: Select[tuple[MembershipRecord]] = (
+                select(MembershipRecord)
+                .where(MembershipRecord.user_id == user_id)
+                .where(MembershipRecord.organization_id == organization_id)
+            )
+            membership = session.execute(membership_stmt).scalar_one_or_none()
+            if membership is None:
+                raise ValueError("user not found")
+
+            user = session.get(UserRecord, user_id)
+            if user is None:
+                raise ValueError("user not found")
+
+            if display_name is not None:
+                user.display_name = display_name.strip()
+            if role is not None:
+                membership.role = role.strip()
+
+            session.commit()
+
+            return UserSummary(
+                user_id=user.id,
+                email=user.email,
+                display_name=user.display_name,
                 organization_id=membership.organization_id,
                 role=membership.role,
             )

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.container import Container, build_container
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.infrastructure.observability.otel import setup_opentelemetry
 from app.interfaces.api.router import get_router
 from app.interfaces.workers.sound_event_worker import SoundEventWorker
 
@@ -29,6 +30,7 @@ def create_app(
             await container.stop()
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    setup_opentelemetry(app, settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

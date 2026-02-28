@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_exp_minutes: int = 120
     sound_event_poll_interval_seconds: float = 2.0
+    otel_enabled: bool = False
+    otel_service_name: str = "rpgsounddesk-backend"
+    otel_exporter_otlp_endpoint: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

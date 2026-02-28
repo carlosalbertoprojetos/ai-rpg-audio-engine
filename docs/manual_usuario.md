@@ -1,213 +1,182 @@
-# RPGSoundDesk - Manual de Instrucoes
+# RPGSoundDesk - Manual de Uso
 
 ## 1. Visao Geral
 
-RPGSoundDesk e uma plataforma para narradores de RPG controlarem trilhas e efeitos sonoros em tempo real, com atualizacao de estado de jogadores e comunicacao via WebSocket.
+RPGSoundDesk e uma plataforma SaaS para mesas de RPG online com controle sonoro em tempo real, estados de jogadores por LED e automacao por eventos.
 
-Funcionalidades principais:
-- Cadastro e login com JWT (seguranca por organizacao e perfil)
-- Criacao de mesas de RPG
-- Adicao de jogadores
-- Indicadores LED de disponibilidade:
-  - `verde`: disponivel
-  - `vermelho`: indisponivel
-- Agendamento de eventos sonoros (ex.: tocar trilha em horario definido)
-- Auditoria de acoes
+Recursos principais:
+- Cadastro e login com JWT
+- Gestao de mesa e jogadores
+- Indicador LED por jogador (`green`/`red`)
+- Sessao de jogo (`start`/`end`)
+- Eventos sonoros agendados
+- Registro de `AudioTrack`
+- Criacao de `Trigger`
+- Geracao de `AIContext`
+- Gestao de `Organization` e plano de `Subscription`
+- Auditoria de eventos
 
 ## 2. Requisitos
 
-- Backend rodando (porta configurada, ex.: `8010`)
-- Frontend rodando (normalmente `5173`)
+- Backend ativo (exemplo: `http://localhost:8010`)
+- Frontend ativo (exemplo: `http://localhost:5173`)
 - Navegador atualizado
 
-## 3. Acesso ao Sistema
+## 3. Primeiro Acesso
 
-1. Abra o frontend no navegador: `http://localhost:5173`
-2. Preencha:
-   - Email
-   - Nome de exibicao
-   - Organizacao
-   - Senha
-3. Clique em `Registrar`
-4. Clique em `Login`
+1. Abra `http://localhost:5173`.
+2. Preencha `E-mail`, `Nome de exibicao`, `Organizacao` e `Senha`.
+3. Clique `Registrar`.
+4. Clique `Login` (ou use o login automatico apos registrar).
 
 Resultado esperado:
-- O sistema gera token JWT e habilita operacoes protegidas.
+- LED de autenticacao fica verde.
+- Operacoes protegidas ficam disponiveis.
 
-## 3.1 Acesso por Outros Computadores (LAN/Internet)
+## 4. Fluxo Operacional Recomendado
 
-Para usuarios em outros computadores acessarem a mesma mesa, o sistema precisa estar rodando em uma maquina "host" acessivel pela rede.
+1. Criar mesa (`Criar Mesa`).
+2. Iniciar sessao (`Iniciar Sessao`).
+3. Adicionar jogadores.
+4. Ajustar LEDs dos jogadores.
+5. Registrar tracks de audio.
+6. Criar triggers da mesa.
+7. Gerar contexto de IA para a sessao.
+8. Agendar eventos sonoros.
+9. Encerrar sessao.
+10. Consultar auditoria.
 
-### Acesso na mesma rede (LAN)
+## 5. Modulos da Interface
 
-1. Na maquina host, suba backend e frontend escutando em `0.0.0.0`.
-2. Descubra o IP da maquina host (ex.: `192.168.0.50`).
-3. Libere no firewall da maquina host as portas usadas (ex.: `8010` e `5173`).
-4. Nos outros computadores, acesse:
-   - Frontend: `http://<IP_DO_HOST>:5173`
+### 5.1 Autenticacao
+- Botao luminoso no topo:
+  - verde: logado
+  - vermelho: deslogado
+- Tooltip do botao mostra status atual.
 
-Configuracao importante do frontend:
-- `VITE_API_BASE_URL=http://<IP_DO_HOST>:8010/api/v1`
-- `VITE_WS_BASE_URL=ws://<IP_DO_HOST>:8010`
+### 5.2 Organization e Subscription
+- Exibe plano atual.
+- Permite atualizar o plano da organizacao.
+- Requer perfil `admin`.
 
-### Acesso pela Internet
+### 5.3 Session
+- `Iniciar Sessao` cria sessao para a mesa atual.
+- `Encerrar Sessao` finaliza a sessao ativa.
 
-Recomendado apenas com HTTPS e proxy reverso (ex.: Nginx/Caddy), porque WebSocket e JWT trafegam dados sensiveis.
+### 5.4 Audio, Trigger e IA
+- `AudioTrack`: registra metadados (`title`, `s3_key`, `duration`).
+- `Trigger`: cria gatilhos por mesa.
+- `AIContext`: gera sugestao de tags por `mood`.
 
-Boas praticas minimas:
-- Usar dominio + TLS (HTTPS/WSS)
-- Configurar proxy para WebSocket (upgrade headers)
-- `JWT_SECRET` forte e privado
-- Restringir CORS no backend (nao deixar `*` em producao)
+### 5.5 Jogadores (Tabela)
+- Lista usuarios registrados da organizacao.
+- Botao `Editar` por linha para nome/role.
+- Requer perfil `admin`.
 
-### Como "ver a mesma mesa"
+### 5.6 LED de Jogadores
+- Clique no card do jogador para alternar disponibilidade.
+- Mudanca e publicada em tempo real por WebSocket.
 
-Conceito:
-- Todos os usuarios devem estar na mesma `organization_id` (organizacao) e operar a mesma mesa pelo mesmo `table_id`.
-- O backend envia eventos por WebSocket no endpoint `/api/v1/ws/tables/{table_id}?token=...`.
+### 5.7 Mesa de Som
+- Botao `Play` agenda evento sonoro para a sessao ativa.
+- Eventos executados sao exibidos no status de eventos.
 
-Limitacao atual da UI:
-- A tela atual cria a mesa e guarda o `table_id` apenas em memoria do navegador.
-- Usuarios em outros computadores ainda nao tem um campo "Entrar em mesa" para informar um `table_id` existente.
+## 6. Perfis e Permissoes
 
-Workarounds (sem mudar codigo):
-- Usar a mesma maquina/navegador para controlar a mesa.
-- Usar chamadas diretas de API/WebSocket (via ferramentas como Postman/Insomnia) apontando para o `table_id`.
-
-Se voce quiser, eu adiciono no frontend:
-- Campo para colar `table_id` e "Entrar em mesa"
-- Link compartilhavel (ex.: `http://<host>:5173/?table_id=...`) para abrir a mesa direto
-
-## 4. Criando e Gerenciando Mesas
-
-1. Clique em `Criar Mesa`
-2. O sistema exibira o ID da mesa atual
-3. Para adicionar jogadores:
-   - Digite o nome do jogador
-   - Clique em `Adicionar Jogador`
-
-## 5. LEDs de Jogadores
-
-Cada jogador possui um LED visual:
-- Verde: jogador disponivel
-- Vermelho: jogador indisponivel
-
-Como alterar:
-1. Clique no card do jogador
-2. O estado alterna entre verde e vermelho
-3. A mudanca e propagada em tempo real
-
-## 6. Mesa de Som
-
-A tela `Mesa de Som` permite controlar trilhas.
-
-Como usar:
-1. Com mesa criada, clique em `Play` na trilha desejada
-2. O sistema agenda um evento sonoro
-3. O worker executa o evento e publica notificacao em tempo real
-
-## 7. Eventos em Tempo Real
-
-O sistema usa WebSocket por mesa:
-- Exibe conexao `online/offline`
-- Mostra `Ultimo Evento` recebido
-
-Eventos comuns:
-- `table.created`
-- `player.added`
-- `player.availability.updated`
-- `sound.event.scheduled`
-- `sound.event.executed`
-
-## 8. Perfis e Permissoes
-
-Perfis suportados:
+Perfis:
 - `admin`
 - `narrator`
 - `observer`
 
 Regras gerais:
-- `admin` e `narrator`: operacoes de escrita (mesa, jogador, eventos)
-- `observer`: leitura (ex.: auditoria, acompanhamento)
-- Acoes sao isoladas por `organization_id`
+- `admin`: acesso total (inclui usuarios e subscription).
+- `narrator`: operacao de mesa/sessao/audio.
+- `observer`: leitura.
+- Escopo sempre limitado por `organization_id`.
 
-## 9. Auditoria
+## 7. Acesso por Outros Computadores
 
-Toda acao relevante gera registro de auditoria, como:
-- Criacao de mesa
-- Adicao de jogador
-- Mudanca de disponibilidade
-- Agendamento de evento sonoro
+### 7.1 Mesma rede (LAN)
 
-Consulta via API:
-- `GET /api/v1/audit/{organization_id}`
+1. Rode backend/frontend no host com `0.0.0.0`.
+2. Descubra o IP do host (exemplo: `192.168.0.50`).
+3. Libere portas no firewall (`8010` e `5173`, conforme setup).
+4. Nos outros computadores, abra `http://<IP_DO_HOST>:5173`.
 
-## 10. Fluxo Recomendado de Uso
+Variaveis do frontend:
+- `VITE_API_BASE_URL=http://<IP_DO_HOST>:8010/api/v1`
+- `VITE_WS_BASE_URL=ws://<IP_DO_HOST>:8010`
 
-1. Registrar usuario
-2. Fazer login
-3. Criar mesa
-4. Adicionar jogadores
-5. Atualizar LEDs conforme status dos jogadores
-6. Acionar trilhas/eventos durante a sessao
-7. Consultar auditoria quando necessario
+### 7.2 Internet
 
-## 11. Solucao de Problemas
+Recomendacoes minimas:
+- HTTPS/WSS com proxy reverso
+- `JWT_SECRET` forte e privado
+- CORS restritivo em producao
 
-### 11.1 Frontend nao conecta no backend
+Observacao atual da UI:
+- Ainda nao ha campo para "entrar em mesa existente por table_id" via link compartilhavel.
 
-Verifique variaveis do frontend:
-- `VITE_API_BASE_URL`
-- `VITE_WS_BASE_URL`
+## 8. Troubleshooting
 
-Exemplo:
-- `VITE_API_BASE_URL=http://localhost:8010/api/v1`
-- `VITE_WS_BASE_URL=ws://localhost:8010`
+### 8.1 Registrar/Login nao acontece
+- Verifique backend em `GET /api/v1/health`.
+- Confirme `VITE_API_BASE_URL` e `VITE_WS_BASE_URL`.
+- Veja a mensagem no rodape da tela (mostra detalhe da falha).
 
-### 11.2 Erro de autenticacao
+### 8.2 Tabela Jogadores vazia
+- Endpoint exige token `admin`.
+- Confirme login ativo (LED verde).
+- Clique `Recarregar` na secao Jogadores.
 
-- Refaça `Login`
-- Confirme email/senha/organizacao corretos
-- Verifique se o usuario foi registrado antes
+### 8.3 Erro de permissao (403)
+- Confira role do usuario.
+- Confira se token e recurso pertencem a mesma organizacao.
 
-### 11.3 Acoes bloqueadas por permissao
+### 8.4 Erro por pasta errada no terminal
+- Backend: executar em `.../rpgsounddesk/backend`
+- Frontend: executar em `.../rpgsounddesk/frontend`
 
-- Confirme o perfil (`admin`, `narrator`, `observer`)
-- Confirme se a organizacao do token e a mesma da mesa
-
-### 11.4 Comandos executados na pasta errada
-
-- Backend: execute em `.../rpgsounddesk/backend`
-- Frontend: execute em `.../rpgsounddesk/frontend`
-
-## 12. Referencia Rapida de APIs
+## 9. Referencia Rapida de API
 
 Autenticacao:
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/token`
 
-Mesa e jogadores:
+Usuarios:
+- `GET /api/v1/users`
+- `PATCH /api/v1/users/{user_id}`
+
+Organizacao:
+- `GET /api/v1/organizations/{organization_id}`
+- `PATCH /api/v1/organizations/{organization_id}/subscription`
+
+Mesa e Jogadores:
 - `POST /api/v1/tables`
 - `POST /api/v1/tables/{table_id}/players`
 - `PATCH /api/v1/tables/{table_id}/players/{player_id}`
 
-Audio:
+Sessao:
+- `POST /api/v1/sessions`
+- `POST /api/v1/sessions/{session_id}/end`
+
+Audio e IA:
 - `POST /api/v1/sound-events`
+- `POST /api/v1/audio-tracks`
+- `GET /api/v1/audio-tracks`
+- `POST /api/v1/triggers`
+- `POST /api/v1/ai-contexts`
 
 Auditoria:
 - `GET /api/v1/audit/{organization_id}`
 
-Healthcheck:
+Health:
 - `GET /api/v1/health`
 
-## 13. Tutoriais e Demos
+## 10. Materiais de Apoio
 
-Tutoriais passo a passo:
-- `docs/tutorials/README.md`
+- Tutoriais: `docs/tutorials/README.md`
+- Script PowerShell: `scripts/demo_api.ps1`
+- Script bash: `scripts/demo_api.sh`
+- Postman: `docs/postman/RPGSoundDesk.postman_collection.json`
 
-Scripts de demonstracao:
-- `scripts/demo_api.ps1` (PowerShell)
-- `scripts/demo_api.sh` (bash)
-
-Colecao Postman:
-- `docs/postman/RPGSoundDesk.postman_collection.json`
