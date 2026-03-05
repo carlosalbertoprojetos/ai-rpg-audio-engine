@@ -23,6 +23,7 @@ dependencies = [
   "opentelemetry-sdk>=1.29.0,<2.0.0",
   "opentelemetry-instrumentation-fastapi>=0.50b0,<1.0.0",
   "opentelemetry-exporter-otlp>=1.29.0,<2.0.0",
+  "python-multipart>=0.0.9,<1.0.0",
 ]
 
 [project.optional-dependencies]

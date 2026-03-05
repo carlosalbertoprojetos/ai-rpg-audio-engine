@@ -99,6 +99,7 @@ class ExecuteDueSoundEventsUseCase:
                         "session_id": sound_event.session_id,
                         "sound_event_id": sound_event.id,
                         "action": sound_event.action,
+                        "target_track_id": sound_event.target_track_id or "",
                     },
                 )
             )

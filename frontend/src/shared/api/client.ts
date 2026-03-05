@@ -176,6 +176,7 @@ export async function scheduleSoundEvent(input: {
   sessionId: string;
   action: string;
   executeAt: string;
+  targetTrackId?: string;
 }): Promise<void> {
   const response = await fetch(`${API_BASE}/sound-events`, {
     method: "POST",
@@ -185,11 +186,36 @@ export async function scheduleSoundEvent(input: {
       session_id: input.sessionId,
       action: input.action,
       execute_at: input.executeAt,
+      target_track_id: input.targetTrackId,
     }),
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
+}
+
+export async function uploadAudioTrackFile(
+  input: { title: string; durationSeconds: number; file: File },
+  token: string
+): Promise<AudioTrackInfo> {
+  const body = new FormData();
+  body.append("title", input.title);
+  body.append("duration_seconds", String(input.durationSeconds));
+  body.append("file", input.file);
+
+  const response = await fetch(`${API_BASE}/audio-tracks/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.json() as Promise<AudioTrackInfo>;
+}
+
+export function buildAudioStreamUrl(trackId: string, token: string): string {
+  return `${API_BASE}/audio-tracks/${trackId}/stream?token=${encodeURIComponent(token)}`;
 }
 
 export async function listUsers(token: string): Promise<RegisteredUser[]> {

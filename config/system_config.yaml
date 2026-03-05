@@ -1,0 +1,11 @@
+emotional_dimension: 5
+embedding_dimension: 128
+lambda_stability: 1.2
+kappa_collective: 0.6
+loss_weights:
+  emotion: 1.0
+  psychoacoustic: 1.0
+  coherence: 0.8
+  economic: 0.3
+  legal: 1.1
+  topology: 0.9

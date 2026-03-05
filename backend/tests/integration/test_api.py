@@ -251,15 +251,21 @@ def test_session_lifecycle_and_enterprise_audio_features() -> None:
         assert start_session.json()["state"] == "running"
 
         create_track = client.post(
-            "/api/v1/audio-tracks",
-            json={"title": "Track 1", "s3_key": "org-demo/track1.mp3", "duration_seconds": 180},
+            "/api/v1/audio-tracks/upload",
+            files={"file": ("track1.mp3", b"ID3FAKEAUDIO", "audio/mpeg")},
+            data={"title": "Track 1", "duration_seconds": "180"},
             headers=headers,
         )
         assert create_track.status_code == 200
+        track_id = create_track.json()["id"]
 
         list_tracks = client.get("/api/v1/audio-tracks", headers=headers)
         assert list_tracks.status_code == 200
         assert len(list_tracks.json()) >= 1
+
+        stream = client.get(f"/api/v1/audio-tracks/{track_id}/stream?token={token}")
+        assert stream.status_code == 200
+        assert stream.content == b"ID3FAKEAUDIO"
 
         create_trigger = client.post(
             "/api/v1/triggers",

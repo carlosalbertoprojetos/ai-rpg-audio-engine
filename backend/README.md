@@ -24,6 +24,8 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
   - `POST /api/v1/sessions/{session_id}/end`
 - Audio/Triggers/AI:
   - `POST /api/v1/audio-tracks`
+  - `POST /api/v1/audio-tracks/upload`
+  - `GET /api/v1/audio-tracks/{track_id}/stream?token=...`
   - `GET /api/v1/audio-tracks`
   - `POST /api/v1/triggers`
   - `POST /api/v1/ai-contexts`

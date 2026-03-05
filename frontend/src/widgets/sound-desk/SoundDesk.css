@@ -30,6 +30,26 @@
   animation: reveal 260ms ease both;
 }
 
+.track-strip.active {
+  border-color: #90be6d;
+  box-shadow: 0 0 0 1px #90be6d66;
+}
+
+.track-category {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #90be6d;
+}
+
+.track-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
 .play-btn {
   width: 100%;
   border: none;
@@ -40,6 +60,24 @@
   background: linear-gradient(180deg, #ffd166, #f9b74c);
   color: #2a1f0e;
   cursor: pointer;
+}
+
+.stop-btn {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: linear-gradient(180deg, #f28482, #df6d68);
+  color: #340f0f;
+  cursor: pointer;
+}
+
+.play-btn:disabled,
+.stop-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .fader-column {
@@ -75,12 +113,30 @@
   height: 95px;
   margin: 0 auto;
   accent-color: #90be6d;
+  cursor: ns-resize;
 }
 
 .track-title {
   margin: 0.65rem 0 0;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.track-desc {
+  margin: 0.25rem 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+  color: #a8bdcf;
+  min-height: 30px;
+}
+
+.track-level {
+  margin: 0.45rem 0 0;
+  text-align: center;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
+  color: #f9c74f;
 }
 
 @keyframes reveal {
@@ -93,4 +149,3 @@
     transform: translateY(0);
   }
 }
-

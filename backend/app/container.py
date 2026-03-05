@@ -36,6 +36,7 @@ from app.application.ports.repositories import (
     TableRepository,
 )
 from app.application.ports.security import PasswordHasher, TokenService
+from app.application.ports.storage import AudioStorage
 from app.application.session.use_cases import EndSessionUseCase, StartSessionUseCase
 from app.application.tableops.use_cases import (
     AddPlayerUseCase,
@@ -70,6 +71,8 @@ from app.infrastructure.repositories.postgres import (
 )
 from app.infrastructure.security.passwords import Pbkdf2PasswordHasher
 from app.infrastructure.security.tokens import JwtTokenService
+from app.infrastructure.storage.in_memory_audio_storage import InMemoryAudioStorage
+from app.infrastructure.storage.s3_storage import S3AudioStorage
 from app.interfaces.ws.manager import TableSocketManager
 
 
@@ -105,6 +108,7 @@ class Container:
     audio_track_repository: AudioTrackRepository
     trigger_repository: TriggerRepository
     ai_context_repository: AIContextRepository
+    audio_storage: AudioStorage
     event_bus: Any
     socket_manager: TableSocketManager
     token_service: TokenService
@@ -133,6 +137,7 @@ def build_container(settings: Settings) -> Container:
     audio_track_repository: AudioTrackRepository
     trigger_repository: TriggerRepository
     ai_context_repository: AIContextRepository
+    audio_storage: AudioStorage
     session_factory: sessionmaker | None = None
 
     if settings.repository_mode == "postgres":
@@ -158,6 +163,11 @@ def build_container(settings: Settings) -> Container:
         audio_track_repository = InMemoryAudioTrackRepository()
         trigger_repository = InMemoryTriggerRepository()
         ai_context_repository = InMemoryAIContextRepository()
+
+    if settings.storage_mode == "s3":
+        audio_storage = S3AudioStorage(settings)
+    else:
+        audio_storage = InMemoryAudioStorage()
 
     if settings.event_bus_mode == "redis":
         redis_client = Redis.from_url(settings.redis_url, decode_responses=False)
@@ -211,6 +221,7 @@ def build_container(settings: Settings) -> Container:
         audio_track_repository=audio_track_repository,
         trigger_repository=trigger_repository,
         ai_context_repository=ai_context_repository,
+        audio_storage=audio_storage,
         event_bus=event_bus,
         socket_manager=socket_manager,
         token_service=token_service,

@@ -46,6 +46,7 @@ services:
       S3_SECRET_KEY: minioadmin
       REPOSITORY_MODE: postgres
       EVENT_BUS_MODE: redis
+      STORAGE_MODE: s3
       JWT_SECRET: super-secret-change-me
     ports:
       - "8000:8000"

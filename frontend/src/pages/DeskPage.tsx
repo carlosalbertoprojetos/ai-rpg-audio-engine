@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AIContextInfo,
   AudioTrackInfo,
@@ -8,7 +8,7 @@ import {
   RegisteredUser,
   SessionInfo,
   addPlayer,
-  createAudioTrack,
+  buildAudioStreamUrl,
   createTable,
   createTrigger,
   endSession,
@@ -20,6 +20,7 @@ import {
   registerUser,
   scheduleSoundEvent,
   startSession,
+  uploadAudioTrackFile,
   updatePlayerAvailability,
   updateSubscriptionPlan,
   updateUser,
@@ -29,17 +30,88 @@ import { PlayerLed } from "../widgets/player-led/PlayerLed";
 import { SoundDesk } from "../widgets/sound-desk/SoundDesk";
 import "./DeskPage.css";
 
-const TRACKS = [
-  { id: "forest", title: "Floresta Nebulosa", level: 82 },
-  { id: "tavern", title: "Taberna da Fronteira", level: 64 },
-  { id: "battle", title: "Emboscada Orc", level: 91 },
-  { id: "void", title: "Abismo Arcano", level: 48 },
+type SoundChannelTemplate = {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  defaultLevel: number;
+  keywords: string[];
+};
+
+type SoundDeskChannel = {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  level: number;
+  canPlay: boolean;
+  isActive: boolean;
+  sourceTrackId?: string;
+};
+
+type BlockedPlayback = {
+  src: string;
+  volume: number;
+  channelId: string | null;
+  title: string;
+};
+
+const SOUND_CHANNEL_TEMPLATES: SoundChannelTemplate[] = [
+  {
+    id: "amb-forest",
+    title: "Floresta Viva",
+    category: "Ambiente",
+    description: "Camada de vento, folhas e vida selvagem.",
+    defaultLevel: 46,
+    keywords: ["forest", "floresta", "nature", "natureza", "wind", "vento"],
+  },
+  {
+    id: "amb-cave",
+    title: "Caverna Profunda",
+    category: "Ambiente",
+    description: "Textura subterranea com gotejamento e eco.",
+    defaultLevel: 38,
+    keywords: ["cave", "caverna", "dungeon", "echo", "subterraneo"],
+  },
+  {
+    id: "amb-city",
+    title: "Cidade Noturna",
+    category: "Ambiente",
+    description: "Movimento urbano e murmurio de fundo.",
+    defaultLevel: 42,
+    keywords: ["city", "cidade", "market", "vila", "street", "taverna"],
+  },
+  {
+    id: "bg-battle",
+    title: "Linha de Combate",
+    category: "Trilha",
+    description: "Base ritmica para cenas de acao.",
+    defaultLevel: 64,
+    keywords: ["battle", "combat", "fight", "boss", "war", "acao"],
+  },
+  {
+    id: "fx-magic",
+    title: "Efeito Magico",
+    category: "Efeito",
+    description: "Entrada para conjuracoes, portais e rituais.",
+    defaultLevel: 58,
+    keywords: ["magic", "spell", "arcane", "ritual", "mystic", "magia"],
+  },
+  {
+    id: "fx-suspense",
+    title: "Tensao",
+    category: "Efeito",
+    description: "Pulso grave para investigacao e suspense.",
+    defaultLevel: 55,
+    keywords: ["suspense", "mystery", "dark", "tense", "drone", "terror"],
+  },
 ];
 
 export function DeskPage() {
   const [tableId, setTableId] = useState<string | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
-  const [newPlayerName, setNewPlayerName] = useState("Luna");
+  const [selectedUserId, setSelectedUserId] = useState<string>("");
 
   const [email, setEmail] = useState("gm@rpgsounddesk.com");
   const [displayName, setDisplayName] = useState("Game Master");
@@ -54,8 +126,8 @@ export function DeskPage() {
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
   const [trackTitle, setTrackTitle] = useState("Battle Theme");
-  const [trackKey, setTrackKey] = useState("org-demo/battle-theme.mp3");
   const [trackDuration, setTrackDuration] = useState(180);
+  const [trackFile, setTrackFile] = useState<File | null>(null);
   const [triggerType, setTriggerType] = useState("scene_change");
   const [triggerScene, setTriggerScene] = useState("battle");
   const [aiMood, setAiMood] = useState("battle");
@@ -69,11 +141,271 @@ export function DeskPage() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [editingRole, setEditingRole] = useState("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const blockedPlaybackRef = useRef<BlockedPlayback | null>(null);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [channelLevels, setChannelLevels] = useState<Record<string, number>>({});
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
 
   const lastEventLabel = useMemo(() => {
     if (!socket.lastEvent) return "Sem eventos recentes";
     return `${socket.lastEvent.event_type} @ ${new Date(socket.lastEvent.occurred_at).toLocaleTimeString()}`;
   }, [socket.lastEvent]);
+
+  const soundDeskTracks = useMemo(() => {
+    const normalizedTracks = audioTracks.map((track) => ({
+      ...track,
+      normalizedTitle: track.title.toLowerCase(),
+    }));
+    const claimedTrackIds = new Set<string>();
+
+    function claimByKeywords(keywords: string[]): AudioTrackInfo | undefined {
+      const keywordSet = keywords.map((keyword) => keyword.toLowerCase());
+      const exactMatch = normalizedTracks.find(
+        (track) =>
+          !claimedTrackIds.has(track.id) &&
+          keywordSet.some((keyword) => track.normalizedTitle.includes(keyword))
+      );
+      if (exactMatch) {
+        claimedTrackIds.add(exactMatch.id);
+        return exactMatch;
+      }
+      const fallback = normalizedTracks.find((track) => !claimedTrackIds.has(track.id));
+      if (fallback) {
+        claimedTrackIds.add(fallback.id);
+      }
+      return fallback;
+    }
+
+    const channels: SoundDeskChannel[] = SOUND_CHANNEL_TEMPLATES.map((template) => {
+      const linkedTrack = claimByKeywords(template.keywords);
+      const baseDescription = linkedTrack
+        ? `${template.description} Vinculada: ${linkedTrack.title}.`
+        : `${template.description} Sem trilha vinculada no momento.`;
+      return {
+        id: template.id,
+        title: template.title,
+        category: template.category,
+        description: baseDescription,
+        level: channelLevels[template.id] ?? template.defaultLevel,
+        canPlay: Boolean(linkedTrack),
+        isActive: activeChannelId === template.id,
+        sourceTrackId: linkedTrack?.id,
+      };
+    });
+
+    const extraTracks = normalizedTracks
+      .filter((track) => !claimedTrackIds.has(track.id))
+      .map((track, index) => {
+        const channelId = `custom-${track.id}`;
+        return {
+          id: channelId,
+          title: track.title,
+          category: "Biblioteca",
+          description: "Faixa adicional da biblioteca registrada.",
+          level: channelLevels[channelId] ?? (45 + (index % 5) * 8),
+          canPlay: true,
+          isActive: activeChannelId === channelId,
+          sourceTrackId: track.id,
+        };
+      });
+
+    return [...channels, ...extraTracks];
+  }, [audioTracks, channelLevels, activeChannelId]);
+
+  const channelMap = useMemo(
+    () => new Map(soundDeskTracks.map((track) => [track.id, track])),
+    [soundDeskTracks]
+  );
+
+  const sourceTrackToChannel = useMemo(() => {
+    const map = new Map<string, string>();
+    soundDeskTracks.forEach((track) => {
+      if (track.sourceTrackId) {
+        map.set(track.sourceTrackId, track.id);
+      }
+    });
+    return map;
+  }, [soundDeskTracks]);
+
+  const stopCurrentAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    if (blockedPlaybackRef.current) {
+      blockedPlaybackRef.current = null;
+    }
+    setAutoplayBlocked(false);
+    setActiveChannelId(null);
+  }, []);
+
+  function describePlaybackError(error: unknown): string {
+    if (error instanceof DOMException) {
+      return `${error.name}: ${error.message}`.trim();
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return "erro desconhecido de reproducao";
+  }
+
+  async function probeAudioStream(src: string): Promise<{ ok: true } | { ok: false; detail: string }> {
+    async function validateResponse(response: Response): Promise<{ ok: true } | { ok: false; detail: string }> {
+      if (!response.ok) {
+        return { ok: false, detail: `stream HTTP ${response.status}` };
+      }
+      const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+      if (!contentType.startsWith("audio/")) {
+        return {
+          ok: false,
+          detail: `stream sem tipo de audio (${contentType || "desconhecido"})`,
+        };
+      }
+      return { ok: true };
+    }
+
+    try {
+      const response = await fetch(src, { method: "HEAD" });
+      if (response.status === 405) {
+        const fallback = await fetch(src, {
+          method: "GET",
+          headers: { Range: "bytes=0-1" },
+        });
+        return validateResponse(fallback);
+      }
+      return validateResponse(response);
+    } catch (error) {
+      return { ok: false, detail: `erro de rede (${describePlaybackError(error)})` };
+    }
+  }
+
+  async function unlockAudioContext(): Promise<void> {
+    const contextCtor =
+      window.AudioContext ??
+      ((window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext ??
+        null);
+    if (!contextCtor) return;
+    const ctx = new contextCtor();
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+    const buffer = ctx.createBuffer(1, 1, 22050);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
+    source.stop(0);
+    await ctx.close();
+  }
+
+  const retryBlockedPlayback = useCallback(async () => {
+    const blocked = blockedPlaybackRef.current;
+    if (!blocked) {
+      return false;
+    }
+    try {
+      const probe = await probeAudioStream(blocked.src);
+      if (!probe.ok) {
+        setMessage(`Falha ao retomar '${blocked.title}' (${probe.detail}).`);
+        return false;
+      }
+      await unlockAudioContext();
+      const player = new Audio(blocked.src);
+      player.volume = blocked.volume;
+      await player.play();
+      audioRef.current = player;
+      setActiveChannelId(blocked.channelId);
+      setAutoplayBlocked(false);
+      blockedPlaybackRef.current = null;
+      setMessage(`Reproducao retomada: ${blocked.title}.`);
+      return true;
+    } catch (error) {
+      setMessage(`Falha ao retomar audio (${describePlaybackError(error)}).`);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!autoplayBlocked) {
+      return;
+    }
+    const onUserInteraction = () => {
+      void retryBlockedPlayback();
+    };
+    window.addEventListener("pointerdown", onUserInteraction);
+    window.addEventListener("keydown", onUserInteraction);
+    return () => {
+      window.removeEventListener("pointerdown", onUserInteraction);
+      window.removeEventListener("keydown", onUserInteraction);
+    };
+  }, [autoplayBlocked, retryBlockedPlayback]);
+
+  useEffect(() => {
+    const event = socket.lastEvent;
+    if (!event || event.event_type !== "sound.event.executed") {
+      return;
+    }
+
+    const action = event.payload.action;
+    if (action === "stop_track") {
+      stopCurrentAudio();
+      setMessage("Reproducao interrompida.");
+      return;
+    }
+
+    if (action !== "play_track" || !token) {
+      return;
+    }
+
+    const sourceTrackId = event.payload.target_track_id;
+    if (!sourceTrackId) {
+      return;
+    }
+
+    const channelId = sourceTrackToChannel.get(sourceTrackId) ?? null;
+    const channelTitle = channelMap.get(channelId ?? "")?.title ?? "trilha";
+    const currentLevel = channelId ? (channelLevels[channelId] ?? 50) : 50;
+    const src = buildAudioStreamUrl(sourceTrackId, token);
+    stopCurrentAudio();
+    void (async () => {
+      const probe = await probeAudioStream(src);
+      if (!probe.ok) {
+        setMessage(`Falha ao reproduzir '${channelTitle}' (${probe.detail}).`);
+        setAutoplayBlocked(false);
+        setActiveChannelId(null);
+        return;
+      }
+
+      const player = new Audio(src);
+      player.volume = Math.min(1, Math.max(0, currentLevel / 100));
+
+      void player.play()
+        .then(() => {
+          audioRef.current = player;
+          setActiveChannelId(channelId);
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "NotAllowedError") {
+            blockedPlaybackRef.current = {
+              src,
+              volume: player.volume,
+              channelId,
+              title: channelTitle,
+            };
+            setAutoplayBlocked(true);
+            setMessage(
+              "Evento executado, mas navegador bloqueou autoplay. Clique na pagina para retomar automaticamente."
+            );
+            return;
+          }
+          setMessage(`Falha ao reproduzir '${channelTitle}' (${describePlaybackError(error)}).`);
+          setAutoplayBlocked(false);
+          setActiveChannelId(null);
+        });
+    })();
+  }, [socket.lastEvent, token, channelLevels, sourceTrackToChannel, stopCurrentAudio, channelMap]);
 
   async function refreshEnterprise(activeToken: string) {
     try {
@@ -105,9 +437,21 @@ export function DeskPage() {
     if (authBusy) return;
     setAuthBusy("register");
     setMessage("Registrando...");
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedOrganization = organizationId.trim();
     try {
-      await registerUser({ email, displayName, password, organizationId, role: "admin" });
-      const nextToken = await issueToken({ email, password, organizationId });
+      await registerUser({
+        email: normalizedEmail,
+        displayName: displayName.trim(),
+        password,
+        organizationId: normalizedOrganization,
+        role: "admin",
+      });
+      const nextToken = await issueToken({
+        email: normalizedEmail,
+        password,
+        organizationId: normalizedOrganization,
+      });
       setToken(nextToken);
       setMessage("Usuario registrado e logado com sucesso.");
       await Promise.all([refreshUsers(nextToken), refreshEnterprise(nextToken)]);
@@ -123,20 +467,33 @@ export function DeskPage() {
     if (authBusy) return;
     setAuthBusy("login");
     setMessage("Autenticando...");
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedOrganization = organizationId.trim();
     try {
-      const nextToken = await issueToken({ email, password, organizationId });
+      const nextToken = await issueToken({
+        email: normalizedEmail,
+        password,
+        organizationId: normalizedOrganization,
+      });
       setToken(nextToken);
       setMessage("Autenticado com sucesso.");
       await Promise.all([refreshUsers(nextToken), refreshEnterprise(nextToken)]);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
-      setMessage(`Falha de autenticacao: ${detail}`);
+      if (String(detail).toLowerCase().includes("invalid credentials")) {
+        setMessage(
+          "Falha de autenticacao: credenciais invalidas. Registre o usuario primeiro ou confira email, senha e organizacao."
+        );
+      } else {
+        setMessage(`Falha de autenticacao: ${detail}`);
+      }
     } finally {
       setAuthBusy(null);
     }
   }
 
   function handleLogout() {
+    stopCurrentAudio();
     setToken(null);
     setTableId(null);
     setPlayers([]);
@@ -145,6 +502,7 @@ export function DeskPage() {
     setOrganization(null);
     setSession(null);
     setAudioTracks([]);
+    setChannelLevels({});
     setLatestAI(null);
     setMessage("Deslogado.");
   }
@@ -187,10 +545,15 @@ export function DeskPage() {
 
   async function handleAddPlayer() {
     if (!tableId || !token) return;
+    const selectedUser = users.find((user) => user.user_id === selectedUserId);
+    if (!selectedUser) {
+      setMessage("Selecione um jogador registrado antes de adicionar.");
+      return;
+    }
     try {
-      const created = await addPlayer(tableId, newPlayerName, token);
+      const created = await addPlayer(tableId, selectedUser.display_name, token);
       setPlayers((current) => [...current, created]);
-      setNewPlayerName("");
+      setSelectedUserId("");
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
       setMessage(`Falha ao adicionar jogador: ${detail}`);
@@ -209,7 +572,15 @@ export function DeskPage() {
     }
   }
 
-  async function handlePlay(trackId: string) {
+  async function handlePlay(channelId: string) {
+    const channel = channelMap.get(channelId);
+    if (!channel) {
+      return;
+    }
+    if (!channel.sourceTrackId) {
+      setMessage(`Canal '${channel.title}' sem trilha vinculada. Registre mais audios para habilitar.`);
+      return;
+    }
     if (!tableId || !token || !session) {
       return setMessage("Crie mesa e inicie sessao antes de tocar trilhas.");
     }
@@ -219,24 +590,68 @@ export function DeskPage() {
         token,
         tableId,
         sessionId: session.id,
-        action: `play:${trackId}`,
+        action: "play_track",
         executeAt,
+        targetTrackId: channel.sourceTrackId,
       });
-      setMessage(`Evento agendado para trilha ${trackId}.`);
+      setActiveChannelId(channelId);
+      setMessage(`Evento agendado para '${channel.title}'.`);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
       setMessage(`Falha ao agendar evento sonoro: ${detail}`);
     }
   }
 
+  async function handleStop(channelId: string) {
+    const channel = channelMap.get(channelId);
+    if (!channel) {
+      return;
+    }
+
+    stopCurrentAudio();
+
+    if (!tableId || !token || !session) {
+      setMessage(`Reproducao local de '${channel.title}' interrompida.`);
+      return;
+    }
+
+    const executeAt = new Date(Date.now() + 350).toISOString();
+    try {
+      await scheduleSoundEvent({
+        token,
+        tableId,
+        sessionId: session.id,
+        action: "stop_track",
+        executeAt,
+        targetTrackId: channel.sourceTrackId,
+      });
+      setMessage(`Parada agendada para '${channel.title}'.`);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "erro desconhecido";
+      setMessage(`Falha ao enviar stop: ${detail}`);
+    }
+  }
+
+  function handleChannelLevelChange(channelId: string, level: number) {
+    setChannelLevels((current) => ({ ...current, [channelId]: level }));
+    if (activeChannelId === channelId && audioRef.current) {
+      audioRef.current.volume = Math.min(1, Math.max(0, level / 100));
+    }
+  }
+
   async function handleCreateTrack() {
     if (!token) return;
+    if (!trackFile) {
+      setMessage("Selecione um arquivo de audio para upload.");
+      return;
+    }
     try {
-      const created = await createAudioTrack(
-        { title: trackTitle, s3Key: trackKey, durationSeconds: trackDuration },
+      const created = await uploadAudioTrackFile(
+        { title: trackTitle, durationSeconds: trackDuration, file: trackFile },
         token
       );
       setAudioTracks((cur) => [created, ...cur]);
+      setTrackFile(null);
       setMessage(`Track registrada: ${created.title}`);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
@@ -306,20 +721,43 @@ export function DeskPage() {
         </div>
       </header>
 
-      <section className="auth-grid">
-        <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="E-mail" />
+      <form
+        className="auth-grid"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (token) {
+            handleLogout();
+          } else {
+            void handleLogin();
+          }
+        }}
+      >
         <input
+          type="email"
+          name="username"
+          autoComplete="username"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          placeholder="E-mail"
+        />
+        <input
+          name="display_name"
+          autoComplete="name"
           value={displayName}
           onChange={(event) => setDisplayName(event.target.value)}
           placeholder="Nome de exibicao"
         />
         <input
+          name="organization_id"
+          autoComplete="organization"
           value={organizationId}
           onChange={(event) => setOrganizationId(event.target.value)}
           placeholder="Organizacao"
         />
         <input
           type="password"
+          name="password"
+          autoComplete="current-password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           placeholder="Senha"
@@ -328,13 +766,12 @@ export function DeskPage() {
           {authBusy === "register" ? "Registrando..." : "Registrar"}
         </button>
         <button
-          type="button"
-          onClick={() => (token ? handleLogout() : void handleLogin())}
+          type="submit"
           disabled={authBusy === "register" || authBusy === "login"}
         >
           {token ? "Logout" : authBusy === "login" ? "Entrando..." : "Login"}
         </button>
-      </section>
+      </form>
 
       <section className="enterprise-grid">
         <article className="enterprise-card">
@@ -381,12 +818,16 @@ export function DeskPage() {
           <h3>Audio Tracks</h3>
           <div className="inline-form">
             <input value={trackTitle} onChange={(e) => setTrackTitle(e.target.value)} placeholder="titulo" />
-            <input value={trackKey} onChange={(e) => setTrackKey(e.target.value)} placeholder="s3 key" />
             <input
               type="number"
               value={trackDuration}
               onChange={(e) => setTrackDuration(Number(e.target.value))}
               placeholder="duracao"
+            />
+            <input
+              type="file"
+              accept="audio/*"
+              onChange={(e) => setTrackFile(e.target.files?.[0] ?? null)}
             />
             <button type="button" onClick={() => void handleCreateTrack()} disabled={!token}>
               Registrar
@@ -558,18 +999,30 @@ export function DeskPage() {
           Criar Mesa
         </button>
         <div className="player-form">
-          <input
-            value={newPlayerName}
-            onChange={(event) => setNewPlayerName(event.target.value)}
-            placeholder="Nome do jogador"
-          />
-          <button type="button" onClick={() => void handleAddPlayer()} disabled={!tableId || !newPlayerName.trim()}>
+          <select
+            value={selectedUserId}
+            onChange={(event) => setSelectedUserId(event.target.value)}
+            disabled={!users.length}
+          >
+            <option value="">Selecione um jogador</option>
+            {users.map((user) => (
+              <option key={user.user_id} value={user.user_id}>
+                {user.display_name}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={() => void handleAddPlayer()} disabled={!tableId || !selectedUserId}>
             Adicionar Jogador
           </button>
         </div>
       </section>
 
-      <SoundDesk tracks={TRACKS} onPlay={(trackId) => void handlePlay(trackId)} />
+      <SoundDesk
+        tracks={soundDeskTracks}
+        onPlay={(trackId) => void handlePlay(trackId)}
+        onStop={(trackId) => void handleStop(trackId)}
+        onLevelChange={handleChannelLevelChange}
+      />
 
       <section className="players">
         <h2>LED de Jogadores</h2>
@@ -585,8 +1038,14 @@ export function DeskPage() {
         </div>
       </section>
 
-      <footer className="message">{message}</footer>
+      <footer className="message">
+        <span>{message}</span>
+        {autoplayBlocked ? (
+          <button type="button" onClick={() => void retryBlockedPlayback()}>
+            Retomar audio
+          </button>
+        ) : null}
+      </footer>
     </main>
   );
 }
-

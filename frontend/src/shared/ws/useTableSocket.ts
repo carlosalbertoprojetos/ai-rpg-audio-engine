@@ -7,7 +7,26 @@ type TableEvent = {
   occurred_at: string;
 };
 
-const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? "ws://localhost:8000";
+function resolveWsBase(): string {
+  const configuredWs = import.meta.env.VITE_WS_BASE_URL;
+  if (configuredWs) {
+    return configuredWs;
+  }
+
+  const configuredApi = import.meta.env.VITE_API_BASE_URL;
+  if (configuredApi) {
+    try {
+      const parsed = new URL(configuredApi);
+      const wsProtocol = parsed.protocol === "https:" ? "wss:" : "ws:";
+      return `${wsProtocol}//${parsed.host}`;
+    } catch {
+      // Fall through to local default.
+    }
+  }
+  return "ws://localhost:8000";
+}
+
+const WS_BASE = resolveWsBase();
 
 export function useTableSocket(tableId: string | null, token: string | null) {
   const [events, setEvents] = useState<TableEvent[]>([]);

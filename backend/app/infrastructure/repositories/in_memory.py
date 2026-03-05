@@ -90,6 +90,9 @@ class InMemoryAudioTrackRepository(AudioTrackRepository):
     async def list_by_organization(self, organization_id: str) -> list[AudioTrack]:
         return [item for item in self._items.values() if item.organization_id == organization_id]
 
+    async def get_by_id(self, track_id: str) -> AudioTrack | None:
+        return self._items.get(track_id)
+
 
 class InMemoryTriggerRepository(TriggerRepository):
     def __init__(self) -> None:

@@ -1,7 +1,22 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
+import mimetypes
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 
 from app.application.audio.use_cases import (
     CreateAudioTrackCommand,
@@ -58,6 +73,62 @@ ADMIN_OR_NARRATOR = {"admin", "narrator"}
 READ_AUDIT_ROLES = {"admin", "narrator", "observer"}
 VALID_ROLES = {"admin", "narrator", "observer"}
 ADMIN_ONLY = {"admin"}
+NON_STANDARD_AUDIO_MIME_MAP = {
+    "audio/mp3": "audio/mpeg",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/x-m4a": "audio/mp4",
+}
+EXTENSION_AUDIO_MIME_MAP = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".weba": "audio/webm",
+}
+
+
+def _canonicalize_mime(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    normalized = raw.split(";", 1)[0].strip().lower()
+    if not normalized:
+        return None
+    return NON_STANDARD_AUDIO_MIME_MAP.get(normalized, normalized)
+
+
+def _guess_audio_mime_from_name(name: str | None) -> str | None:
+    if not name:
+        return None
+    guessed, _ = mimetypes.guess_type(name)
+    guessed_mime = _canonicalize_mime(guessed)
+    if guessed_mime and guessed_mime.startswith("audio/"):
+        return guessed_mime
+    suffix = Path(name).suffix.lower()
+    return EXTENSION_AUDIO_MIME_MAP.get(suffix)
+
+
+def _resolve_upload_audio_mime(uploaded_mime: str | None, filename: str | None) -> str:
+    canonical = _canonicalize_mime(uploaded_mime)
+    if canonical and canonical.startswith("audio/"):
+        return canonical
+    guessed = _guess_audio_mime_from_name(filename)
+    if guessed:
+        return guessed
+    raise HTTPException(status_code=415, detail="unsupported audio format")
+
+
+def _resolve_stream_audio_mime(stored_mime: str | None, object_key: str) -> str:
+    canonical = _canonicalize_mime(stored_mime)
+    if canonical and canonical.startswith("audio/"):
+        return canonical
+    guessed = _guess_audio_mime_from_name(object_key)
+    if guessed:
+        return guessed
+    return "audio/mpeg"
 
 
 def get_router(get_container: Callable[[], Container]) -> APIRouter:
@@ -415,6 +486,71 @@ def get_router(get_container: Callable[[], Container]) -> APIRouter:
             title=track.title,
             s3_key=track.s3_key,
             duration_seconds=track.duration_seconds,
+        )
+
+    @router.post("/audio-tracks/upload", response_model=AudioTrackResponse)
+    async def upload_audio_track(
+        title: str = Form(min_length=1, max_length=160),
+        duration_seconds: int = Form(gt=0, lt=72000),
+        file: UploadFile = File(...),
+        auth: AuthContext = Depends(get_auth_context),
+        container: Container = Depends(get_container),
+    ) -> AudioTrackResponse:
+        require_roles(auth, ADMIN_OR_NARRATOR, "upload_audio_track")
+        body = await file.read()
+        if not body:
+            raise HTTPException(status_code=400, detail="empty audio file")
+        key = f"{auth.organization_id}/{uuid4()}-{file.filename or 'audio.bin'}"
+        content_type = _resolve_upload_audio_mime(file.content_type, file.filename)
+
+        await container.audio_storage.ensure_ready()
+        await container.audio_storage.upload(key=key, data=body, content_type=content_type)
+
+        track = await container.use_cases.create_audio_track(
+            CreateAudioTrackCommand(
+                organization_id=auth.organization_id,
+                title=title,
+                s3_key=key,
+                duration_seconds=duration_seconds,
+                actor_id=auth.user_id,
+            )
+        )
+        return AudioTrackResponse(
+            id=track.id,
+            organization_id=track.organization_id,
+            title=track.title,
+            s3_key=track.s3_key,
+            duration_seconds=track.duration_seconds,
+        )
+
+    @router.get("/audio-tracks/{track_id}/stream")
+    async def stream_audio_track(
+        track_id: str,
+        token: str = Query(min_length=10),
+        container: Container = Depends(get_container),
+    ) -> Response:
+        try:
+            payload = container.token_service.decode(token)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="invalid token") from exc
+        track = await container.audio_track_repository.get_by_id(track_id)
+        if track is None:
+            raise HTTPException(status_code=404, detail="track not found")
+        if track.organization_id != payload.organization_id:
+            raise HTTPException(status_code=403, detail="organization scope mismatch")
+        try:
+            body, content_type = await container.audio_storage.download(track.s3_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="audio object not found") from exc
+        resolved_mime = _resolve_stream_audio_mime(content_type, track.s3_key)
+        filename = Path(track.s3_key).name
+        return Response(
+            content=body,
+            media_type=resolved_mime,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{filename}"',
+            },
         )
 
     @router.get("/audio-tracks", response_model=list[AudioTrackResponse])

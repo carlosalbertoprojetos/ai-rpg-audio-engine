@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     s3_bucket: str = "rpgsounddesk-audio"
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
+    storage_mode: str = "in_memory"
     repository_mode: str = "in_memory"
     event_bus_mode: str = "in_memory"
     jwt_secret: str = "change-me"

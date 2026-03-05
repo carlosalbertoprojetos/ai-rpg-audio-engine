@@ -10,7 +10,7 @@ Recursos principais:
 - Indicador LED por jogador (`green`/`red`)
 - Sessao de jogo (`start`/`end`)
 - Eventos sonoros agendados
-- Registro de `AudioTrack`
+- Upload e reproducao de `AudioTrack`
 - Criacao de `Trigger`
 - Geracao de `AIContext`
 - Gestao de `Organization` e plano de `Subscription`
@@ -39,10 +39,10 @@ Resultado esperado:
 2. Iniciar sessao (`Iniciar Sessao`).
 3. Adicionar jogadores.
 4. Ajustar LEDs dos jogadores.
-5. Registrar tracks de audio.
+5. Fazer upload de tracks de audio.
 6. Criar triggers da mesa.
 7. Gerar contexto de IA para a sessao.
-8. Agendar eventos sonoros.
+8. Agendar eventos sonoros para um track alvo.
 9. Encerrar sessao.
 10. Consultar auditoria.
 
@@ -64,7 +64,7 @@ Resultado esperado:
 - `Encerrar Sessao` finaliza a sessao ativa.
 
 ### 5.4 Audio, Trigger e IA
-- `AudioTrack`: registra metadados (`title`, `s3_key`, `duration`).
+- `AudioTrack`: upload de arquivo (`audio/*`) com `title` e `duration`.
 - `Trigger`: cria gatilhos por mesa.
 - `AIContext`: gera sugestao de tags por `mood`.
 
@@ -79,7 +79,7 @@ Resultado esperado:
 
 ### 5.7 Mesa de Som
 - Botao `Play` agenda evento sonoro para a sessao ativa.
-- Eventos executados sao exibidos no status de eventos.
+- Quando `sound.event.executed` ocorre, o frontend reproduz o audio do `target_track_id`.
 
 ## 6. Perfis e Permissoes
 
@@ -163,6 +163,8 @@ Sessao:
 Audio e IA:
 - `POST /api/v1/sound-events`
 - `POST /api/v1/audio-tracks`
+- `POST /api/v1/audio-tracks/upload`
+- `GET /api/v1/audio-tracks/{track_id}/stream?token=...`
 - `GET /api/v1/audio-tracks`
 - `POST /api/v1/triggers`
 - `POST /api/v1/ai-contexts`
@@ -179,4 +181,3 @@ Health:
 - Script PowerShell: `scripts/demo_api.ps1`
 - Script bash: `scripts/demo_api.sh`
 - Postman: `docs/postman/RPGSoundDesk.postman_collection.json`
-

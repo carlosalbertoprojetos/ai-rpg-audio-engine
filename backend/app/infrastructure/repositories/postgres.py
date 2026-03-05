@@ -358,6 +358,23 @@ class PostgresAudioTrackRepository(AudioTrackRepository):
                 for row in rows
             ]
 
+    async def get_by_id(self, track_id: str) -> AudioTrack | None:
+        return await asyncio.to_thread(self._get_by_id_sync, track_id)
+
+    def _get_by_id_sync(self, track_id: str) -> AudioTrack | None:
+        with self._session_factory() as session:
+            session: OrmSession
+            row = session.get(AudioTrackRecord, track_id)
+            if row is None:
+                return None
+            return AudioTrack(
+                id=row.id,
+                organization_id=row.organization_id,
+                title=row.title,
+                s3_key=row.s3_key,
+                duration_seconds=row.duration_seconds,
+            )
+
 
 class PostgresTriggerRepository(TriggerRepository):
     def __init__(self, session_factory: sessionmaker) -> None:
