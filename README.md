@@ -7,6 +7,7 @@ Plataforma SaaS de mesa de som para RPG online com IA adaptativa, arquitetura DD
 - `docs/architecture.md`: Fase 1 completa (analise, arquitetura, validacao e estrategia)
 - `backend/`: FastAPI + WebSocket + camadas DDD/Clean + testes
 - `frontend/`: React + cliente WebSocket + UI de mesa de som com LEDs
+- `audio-orchestrator-saas/`: subprojeto de orquestracao inteligente de audio por prompt (pipeline semantico + providers + mixer + API)
 - `docker-compose.yml`: PostgreSQL, Redis, MinIO, backend e frontend
 - `.github/workflows/ci.yml`: pipeline de lint/test/build
 

@@ -218,6 +218,97 @@
   padding: 0.6rem 0.8rem;
   color: #c8d6e0;
   border-radius: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.orchestrator-panel {
+  border: 1px solid #365065;
+  border-radius: 14px;
+  background: #111b23;
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.orchestrator-panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.orchestrator-panel p {
+  margin: 0.25rem 0 0;
+  color: #a8bdcf;
+}
+
+.orchestrator-controls {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.orchestrator-controls textarea {
+  border: 1px solid #4b667a;
+  border-radius: 10px;
+  padding: 0.58rem 0.7rem;
+  background: #0f171e;
+  color: #eaf3fc;
+  resize: vertical;
+}
+
+.orchestrator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.orchestrator-actions select {
+  border: 1px solid #4b667a;
+  border-radius: 10px;
+  padding: 0.48rem 0.62rem;
+  background: #0f171e;
+  color: #eaf3fc;
+}
+
+.orchestrator-actions button,
+.message button {
+  border: 0;
+  background: linear-gradient(180deg, #f9c74f, #f2a93d);
+  color: #2b210f;
+  border-radius: 10px;
+  padding: 0.5rem 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.orchestrator-actions button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.orchestrator-result {
+  border: 1px solid #243646;
+  border-radius: 10px;
+  padding: 0.65rem;
+  background: #0f171e;
+}
+
+.orchestrator-result audio {
+  width: 100%;
+  margin: 0.45rem 0 0.6rem;
+}
+
+.orchestrator-result ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #d3e0ea;
+}
+
+.orchestrator-empty {
+  margin: 0;
+  color: #8facbf;
 }
 
 .users-panel {

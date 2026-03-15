@@ -4,14 +4,17 @@ import {
   AudioTrackInfo,
   Availability,
   OrganizationInfo,
+  OrchestratedSceneResponse,
   Player,
   RegisteredUser,
   SessionInfo,
   addPlayer,
   buildAudioStreamUrl,
+  buildOrchestratedAudioUrl,
   createTable,
   createTrigger,
   endSession,
+  generateOrchestratedScene,
   generateAIContext,
   getOrganization,
   issueToken,
@@ -132,6 +135,10 @@ export function DeskPage() {
   const [triggerScene, setTriggerScene] = useState("battle");
   const [aiMood, setAiMood] = useState("battle");
   const [latestAI, setLatestAI] = useState<AIContextInfo | null>(null);
+  const [scenePrompt, setScenePrompt] = useState("Medieval forest ambience with distant battle");
+  const [sceneFormat, setSceneFormat] = useState<"wav" | "mp3" | "ogg">("wav");
+  const [sceneBusy, setSceneBusy] = useState(false);
+  const [generatedScene, setGeneratedScene] = useState<OrchestratedSceneResponse | null>(null);
 
   const socket = useTableSocket(tableId, token);
 
@@ -252,6 +259,10 @@ export function DeskPage() {
   }
 
   async function probeAudioStream(src: string): Promise<{ ok: true } | { ok: false; detail: string }> {
+    if (src.startsWith("data:") || src.startsWith("blob:")) {
+      return { ok: true };
+    }
+
     async function validateResponse(response: Response): Promise<{ ok: true } | { ok: false; detail: string }> {
       if (!response.ok) {
         return { ok: false, detail: `stream HTTP ${response.status}` };
@@ -327,6 +338,56 @@ export function DeskPage() {
     }
   }, []);
 
+  const playAudioFromUrl = useCallback(
+    async ({
+      src,
+      channelTitle,
+      channelId,
+      level,
+    }: {
+      src: string;
+      channelTitle: string;
+      channelId: string | null;
+      level: number;
+    }) => {
+      stopCurrentAudio();
+      const probe = await probeAudioStream(src);
+      if (!probe.ok) {
+        setMessage(`Falha ao reproduzir '${channelTitle}' (${probe.detail}).`);
+        setAutoplayBlocked(false);
+        setActiveChannelId(null);
+        return;
+      }
+
+      const player = new Audio(src);
+      player.volume = Math.min(1, Math.max(0, level / 100));
+      void player.play()
+        .then(() => {
+          audioRef.current = player;
+          setActiveChannelId(channelId);
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "NotAllowedError") {
+            blockedPlaybackRef.current = {
+              src,
+              volume: player.volume,
+              channelId,
+              title: channelTitle,
+            };
+            setAutoplayBlocked(true);
+            setMessage(
+              "Evento executado, mas navegador bloqueou autoplay. Clique na pagina para retomar automaticamente."
+            );
+            return;
+          }
+          setMessage(`Falha ao reproduzir '${channelTitle}' (${describePlaybackError(error)}).`);
+          setAutoplayBlocked(false);
+          setActiveChannelId(null);
+        });
+    },
+    [stopCurrentAudio]
+  );
+
   useEffect(() => {
     if (!autoplayBlocked) {
       return;
@@ -368,44 +429,13 @@ export function DeskPage() {
     const channelTitle = channelMap.get(channelId ?? "")?.title ?? "trilha";
     const currentLevel = channelId ? (channelLevels[channelId] ?? 50) : 50;
     const src = buildAudioStreamUrl(sourceTrackId, token);
-    stopCurrentAudio();
-    void (async () => {
-      const probe = await probeAudioStream(src);
-      if (!probe.ok) {
-        setMessage(`Falha ao reproduzir '${channelTitle}' (${probe.detail}).`);
-        setAutoplayBlocked(false);
-        setActiveChannelId(null);
-        return;
-      }
-
-      const player = new Audio(src);
-      player.volume = Math.min(1, Math.max(0, currentLevel / 100));
-
-      void player.play()
-        .then(() => {
-          audioRef.current = player;
-          setActiveChannelId(channelId);
-        })
-        .catch((error) => {
-          if (error instanceof DOMException && error.name === "NotAllowedError") {
-            blockedPlaybackRef.current = {
-              src,
-              volume: player.volume,
-              channelId,
-              title: channelTitle,
-            };
-            setAutoplayBlocked(true);
-            setMessage(
-              "Evento executado, mas navegador bloqueou autoplay. Clique na pagina para retomar automaticamente."
-            );
-            return;
-          }
-          setMessage(`Falha ao reproduzir '${channelTitle}' (${describePlaybackError(error)}).`);
-          setAutoplayBlocked(false);
-          setActiveChannelId(null);
-        });
-    })();
-  }, [socket.lastEvent, token, channelLevels, sourceTrackToChannel, stopCurrentAudio, channelMap]);
+    void playAudioFromUrl({
+      src,
+      channelTitle,
+      channelId,
+      level: currentLevel,
+    });
+  }, [socket.lastEvent, token, channelLevels, sourceTrackToChannel, channelMap, playAudioFromUrl]);
 
   async function refreshEnterprise(activeToken: string) {
     try {
@@ -457,7 +487,11 @@ export function DeskPage() {
       await Promise.all([refreshUsers(nextToken), refreshEnterprise(nextToken)]);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
-      setMessage(`Falha ao registrar: ${detail}`);
+      if (detail.includes("backend offline")) {
+        setMessage(`Falha ao registrar: ${detail}`);
+      } else {
+        setMessage(`Falha ao registrar: ${detail}`);
+      }
     } finally {
       setAuthBusy(null);
     }
@@ -480,9 +514,11 @@ export function DeskPage() {
       await Promise.all([refreshUsers(nextToken), refreshEnterprise(nextToken)]);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
-      if (String(detail).toLowerCase().includes("invalid credentials")) {
+      if (detail.includes("backend offline")) {
+        setMessage(`Falha de autenticacao: ${detail}`);
+      } else if (String(detail).toLowerCase().includes("invalid credentials")) {
         setMessage(
-          "Falha de autenticacao: credenciais invalidas. Registre o usuario primeiro ou confira email, senha e organizacao."
+          "Falha de autenticacao: credenciais invalidas. Se o backend foi reiniciado em modo local, registre o usuario novamente antes do login."
         );
       } else {
         setMessage(`Falha de autenticacao: ${detail}`);
@@ -578,7 +614,32 @@ export function DeskPage() {
       return;
     }
     if (!channel.sourceTrackId) {
-      setMessage(`Canal '${channel.title}' sem trilha vinculada. Registre mais audios para habilitar.`);
+      setSceneBusy(true);
+      setMessage(`Canal '${channel.title}' sem trilha vinculada. Gerando fallback IA...`);
+      try {
+        const fallbackScene = await generateOrchestratedScene({
+          prompt: `${channel.title}. ${channel.description}`,
+          outputFormat: sceneFormat,
+          maxLayers: 4,
+        });
+        setGeneratedScene(fallbackScene);
+        await playAudioFromUrl({
+          src: buildOrchestratedAudioUrl(fallbackScene.audio_url),
+          channelTitle: channel.title,
+          channelId: channel.id,
+          level: channel.level,
+        });
+        setMessage(
+          `Fallback IA pronto para '${channel.title}' (${fallbackScene.layers.length} camadas${
+            fallbackScene.cached ? ", cache" : ""
+          }).`
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "erro desconhecido";
+        setMessage(`Falha ao gerar fallback IA para '${channel.title}': ${detail}`);
+      } finally {
+        setSceneBusy(false);
+      }
       return;
     }
     if (!tableId || !token || !session) {
@@ -682,6 +743,31 @@ export function DeskPage() {
     } catch (err) {
       const detail = err instanceof Error ? err.message : "erro desconhecido";
       setMessage(`Falha ao gerar contexto IA: ${detail}`);
+    }
+  }
+
+  async function handleGenerateOrchestratedScene() {
+    const prompt = scenePrompt.trim();
+    if (prompt.length < 3) {
+      setMessage("Descreva uma cena com pelo menos 3 caracteres.");
+      return;
+    }
+    setSceneBusy(true);
+    try {
+      const result = await generateOrchestratedScene({
+        prompt,
+        outputFormat: sceneFormat,
+        maxLayers: 4,
+      });
+      setGeneratedScene(result);
+      setMessage(
+        `Cena gerada: ${result.scene_id} (${result.layers.length} camadas${result.cached ? ", cache" : ""}).`
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "erro desconhecido";
+      setMessage(`Falha ao gerar cena orquestrada: ${detail}`);
+    } finally {
+      setSceneBusy(false);
     }
   }
 
@@ -845,6 +931,51 @@ export function DeskPage() {
             </button>
           </div>
         </article>
+      </section>
+
+      <section className="orchestrator-panel">
+        <header>
+          <h2>Orquestrador de Cena</h2>
+          <p>Gera trilha multicamadas por prompt semantico usando provedores inteligentes.</p>
+        </header>
+        <div className="orchestrator-controls">
+          <textarea
+            value={scenePrompt}
+            onChange={(event) => setScenePrompt(event.target.value)}
+            placeholder="Ex.: Medieval forest ambience with distant battle"
+            rows={3}
+          />
+          <div className="orchestrator-actions">
+            <select
+              value={sceneFormat}
+              onChange={(event) => setSceneFormat(event.target.value as "wav" | "mp3" | "ogg")}
+            >
+              <option value="wav">wav</option>
+              <option value="mp3">mp3</option>
+              <option value="ogg">ogg</option>
+            </select>
+            <button type="button" onClick={() => void handleGenerateOrchestratedScene()} disabled={sceneBusy}>
+              {sceneBusy ? "Gerando..." : "Gerar Cena"}
+            </button>
+          </div>
+        </div>
+        {generatedScene ? (
+          <div className="orchestrator-result">
+            <p>
+              Scene ID: <span className="mono">{generatedScene.scene_id}</span>
+            </p>
+            <audio controls preload="metadata" src={buildOrchestratedAudioUrl(generatedScene.audio_url)} />
+            <ul>
+              {generatedScene.layers.map((layer) => (
+                <li key={layer.layer_id}>
+                  {layer.label} | provider={layer.provider} | volume={layer.volume.toFixed(2)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="orchestrator-empty">Nenhuma cena gerada ainda.</p>
+        )}
       </section>
 
       <section className="users-panel">

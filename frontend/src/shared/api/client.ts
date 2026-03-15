@@ -54,6 +54,25 @@ export type AIContextInfo = {
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const AUDIO_ORCHESTRATOR_BASE =
+  import.meta.env.VITE_AUDIO_ORCHESTRATOR_BASE_URL ?? "http://localhost:8090/api";
+
+export type OrchestratedLayer = {
+  layer_id: string;
+  label: string;
+  provider: string;
+  asset_id: string;
+  license_type: string;
+  volume: number;
+};
+
+export type OrchestratedSceneResponse = {
+  scene_id: string;
+  audio_url: string;
+  output_format: string;
+  cached: boolean;
+  layers: OrchestratedLayer[];
+};
 
 type AuthHeadersInput = {
   token: string;
@@ -81,6 +100,20 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 }
 
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError && /fetch/i.test(error.message);
+}
+
+function normalizeRequestError(error: unknown, offlineMessage: string): Error {
+  if (isNetworkError(error)) {
+    return new Error(offlineMessage);
+  }
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error("erro desconhecido");
+}
+
 export async function registerUser(input: {
   email: string;
   displayName: string;
@@ -88,19 +121,26 @@ export async function registerUser(input: {
   organizationId: string;
   role: "admin" | "narrator" | "observer";
 }): Promise<void> {
-  const response = await fetch(`${API_BASE}/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: input.email,
-      display_name: input.displayName,
-      password: input.password,
-      organization_id: input.organizationId,
-      role: input.role,
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+  try {
+    const response = await fetch(`${API_BASE}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: input.email,
+        display_name: input.displayName,
+        password: input.password,
+        organization_id: input.organizationId,
+        role: input.role,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+  } catch (error) {
+    throw normalizeRequestError(
+      error,
+      "backend offline em http://localhost:8000. Inicie a API antes de registrar."
+    );
   }
 }
 
@@ -109,20 +149,27 @@ export async function issueToken(input: {
   password: string;
   organizationId: string;
 }): Promise<string> {
-  const response = await fetch(`${API_BASE}/auth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: input.email,
-      password: input.password,
-      organization_id: input.organizationId,
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(await readErrorMessage(response));
+  try {
+    const response = await fetch(`${API_BASE}/auth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        organization_id: input.organizationId,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+    const payload = (await response.json()) as { access_token: string };
+    return payload.access_token;
+  } catch (error) {
+    throw normalizeRequestError(
+      error,
+      "backend offline em http://localhost:8000. Inicie a API antes de autenticar."
+    );
   }
-  const payload = (await response.json()) as { access_token: string };
-  return payload.access_token;
 }
 
 export async function createTable(name: string, token: string): Promise<{ id: string }> {
@@ -363,4 +410,172 @@ export async function generateAIContext(
     throw new Error(await readErrorMessage(response));
   }
   return response.json() as Promise<AIContextInfo>;
+}
+
+export async function generateOrchestratedScene(input: {
+  prompt: string;
+  outputFormat: "wav" | "mp3" | "ogg";
+  maxLayers?: number;
+}): Promise<OrchestratedSceneResponse> {
+  const candidates = resolveOrchestratorCandidates();
+  let lastError: Error | null = null;
+  let hadHttpResponse = false;
+
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/generate-audio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: input.prompt,
+          output_format: input.outputFormat,
+          max_layers: input.maxLayers ?? 4,
+        }),
+      });
+      if (!response.ok) {
+        hadHttpResponse = true;
+        lastError = new Error(await readErrorMessage(response));
+        continue;
+      }
+      return response.json() as Promise<OrchestratedSceneResponse>;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "erro de rede";
+      lastError = new Error(detail);
+    }
+  }
+
+  if (hadHttpResponse && lastError) {
+    throw lastError;
+  }
+
+  return buildLocalSynthScene(input.prompt);
+}
+
+export function buildOrchestratedAudioUrl(audioUrl: string): string {
+  if (audioUrl.startsWith("data:") || audioUrl.startsWith("blob:")) {
+    return audioUrl;
+  }
+  if (/^https?:\/\//i.test(audioUrl)) {
+    return audioUrl;
+  }
+  const fallbackOrigin = "http://localhost:8090";
+  let origin = fallbackOrigin;
+  try {
+    const parsed = new URL(AUDIO_ORCHESTRATOR_BASE);
+    origin = `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    origin = fallbackOrigin;
+  }
+  if (audioUrl.startsWith("/")) {
+    return `${origin}${audioUrl}`;
+  }
+  return `${AUDIO_ORCHESTRATOR_BASE.replace(/\/$/, "")}/${audioUrl}`;
+}
+
+function resolveOrchestratorCandidates(): string[] {
+  const items: string[] = [AUDIO_ORCHESTRATOR_BASE];
+  try {
+    const parsedApi = new URL(API_BASE);
+    items.push(`${parsedApi.protocol}//${parsedApi.hostname}:8090/api`);
+  } catch {
+    // Ignore malformed API_BASE fallback candidate.
+  }
+  if (typeof window !== "undefined") {
+    items.push(`${window.location.protocol}//${window.location.hostname}:8090/api`);
+  }
+
+  const seen = new Set<string>();
+  return items
+    .map((value) => value.replace(/\/$/, ""))
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+}
+
+function buildLocalSynthScene(prompt: string): OrchestratedSceneResponse {
+  const sceneId = `local-${Math.random().toString(16).slice(2, 10)}`;
+  const audioUrl = buildSyntheticWavDataUri(prompt);
+  return {
+    scene_id: sceneId,
+    audio_url: audioUrl,
+    output_format: "wav",
+    cached: false,
+    layers: [
+      {
+        layer_id: `${sceneId}-layer`,
+        label: "Local Synth Fallback",
+        provider: "local_synth",
+        asset_id: `${sceneId}-asset`,
+        license_type: "cc0",
+        volume: 0.62,
+      },
+    ],
+  };
+}
+
+function buildSyntheticWavDataUri(seedText: string): string {
+  const sampleRate = 22050;
+  const seconds = 6;
+  const sampleCount = sampleRate * seconds;
+  const hash = hashText(seedText);
+  const baseFreq = 120 + (hash % 260);
+  const secondaryFreq = baseFreq * 1.5;
+
+  const pcm = new Int16Array(sampleCount);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const t = i / sampleRate;
+    const envelope = Math.min(1, t / 0.8) * Math.min(1, (seconds - t) / 0.8);
+    const wave =
+      0.55 * Math.sin(2 * Math.PI * baseFreq * t) +
+      0.25 * Math.sin(2 * Math.PI * secondaryFreq * t);
+    pcm[i] = Math.max(-32767, Math.min(32767, Math.round(wave * envelope * 21000)));
+  }
+
+  const dataSize = pcm.length * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < pcm.length; i += 1) {
+    view.setInt16(offset, pcm[i], true);
+    offset += 2;
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+function writeAscii(view: DataView, offset: number, text: string): void {
+  for (let i = 0; i < text.length; i += 1) {
+    view.setUint8(offset + i, text.charCodeAt(i));
+  }
+}
+
+function hashText(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h >>> 0);
 }

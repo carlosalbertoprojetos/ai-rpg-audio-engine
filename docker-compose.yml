@@ -57,11 +57,27 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - backend
+      - audio-orchestrator
     environment:
       VITE_API_BASE_URL: http://localhost:8000/api/v1
       VITE_WS_BASE_URL: ws://localhost:8000
+      VITE_AUDIO_ORCHESTRATOR_BASE_URL: http://localhost:8090/api
     ports:
       - "5173:5173"
+
+  audio-orchestrator:
+    build:
+      context: ./audio-orchestrator-saas
+      dockerfile: infra/docker/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL_SECONDS: 1800
+      OUTPUT_DIR: generated_audio
+      DATABASE_PATH: data/audio_orchestrator.db
+    depends_on:
+      - redis
+    ports:
+      - "8090:8090"
 
 volumes:
   postgres_data:
